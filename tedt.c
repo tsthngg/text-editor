@@ -14,7 +14,8 @@
 #define DOWN 80
 #define HOME 71
 #define END 79
-#define DELETE 83
+#define DELETE_BUTTON 83
+#define TAB 9
 
 typedef struct {
     char *data;
@@ -43,7 +44,7 @@ void get_cursor_pos(Buffer *buffer, Cursor *cursor, int *line, int *col);
 void change_prefer_col(Buffer *buffer, Cursor *cursor);
 
 void editor_render(HANDLE hConsole, Buffer *buffer, Cursor *cursor);
-void editor_key_handle(HANDLE hConsole, Buffer *buffer, Cursor *cursor, int c);
+void editor_key_handle(Buffer *buffer, Cursor *cursor, int c);
 
 int main() {
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -59,7 +60,7 @@ int main() {
     while(1) {
         int c = _getch();
         if (c == ESC) break;
-        editor_key_handle(hConsole, &buffer, &cursor, c);
+        editor_key_handle(&buffer, &cursor, c);
         editor_render(hConsole, &buffer, &cursor);
     } 
 
@@ -67,43 +68,48 @@ int main() {
     return 0;
 }
 
-void editor_key_handle(HANDLE hConsole, Buffer *buffer, Cursor *cursor, int c){
+void editor_key_handle(Buffer *buffer, Cursor *cursor, int c){
     if (c == BACKSPACE) {
         if (cursor->pos > 0) {
+            backspace(buffer, cursor->pos);
             cursor->pos--;
-            backspace(&buffer, cursor->pos);
-            change_prefer_col(&buffer, &cursor);
+            change_prefer_col(buffer, cursor);
         }
     }
     else if (c == ENTER) {
-        buffer_insert(&buffer, cursor->pos, '\n');
+        buffer_insert(buffer, cursor->pos, '\n');
         cursor->pos++;
-        change_prefer_col(&buffer, &cursor);
+        change_prefer_col(buffer, cursor);
     }
     else if (c == SPECIAL) {
         int key = _getch();
         if (key == LEFT) {
             if (cursor->pos == 0) return;
             cursor->pos--;
-            cursor_to_screen(hConsole, &buffer, &cursor);
-            change_prefer_col(&buffer, &cursor);
+            change_prefer_col(buffer, cursor);
         }
         else if (key == RIGHT) {
             if (cursor->pos == buffer->length) return;
             cursor->pos++;
-            cursor_to_screen(hConsole, &buffer, &cursor);
-            change_prefer_col(&buffer, &cursor);
+            change_prefer_col(buffer, cursor);
         }
-        else if (key == UP) cursor_up(&buffer, &cursor);
-        else if (key == DOWN) cursor_down(&buffer, &cursor);
-        else if (key == HOME) home(&buffer, &cursor);
-        else if (key == END) end(&buffer, &cursor);
-        else if (key == DELETE) delete_button(&buffer, cursor->pos);
+        else if (key == TAB) {
+            for (int i = 0; i < 4; i++) {
+                buffer_insert(buffer, cursor->pos, ' ');
+                cursor->pos++;
+            }
+            change_prefer_col(buffer, cursor);
+        }
+        else if (key == UP) cursor_up(buffer, cursor);
+        else if (key == DOWN) cursor_down(buffer, cursor);
+        else if (key == HOME) home(buffer, cursor);
+        else if (key == END) end(buffer, cursor);
+        else if (key == DELETE_BUTTON) delete_button(buffer, cursor->pos);
     }
     else {
-        buffer_insert(&buffer, cursor->pos, c);
+        buffer_insert(buffer, cursor->pos, c);
         cursor->pos++;
-        change_prefer_col(&buffer, &cursor);
+        change_prefer_col(buffer, cursor);
     }
 }
 
