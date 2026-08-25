@@ -21,13 +21,20 @@ typedef struct {
 
 typedef struct {
     int pos;
+    int prefer_col;
 } Cursor;
 
 int buffer_init(Buffer *buffer);
 void buffer_backspace(Buffer *buffer, int pos);
 void buffer_print(Buffer *buffer);
 void buffer_insert(Buffer *buffer, int pos, char c);
+
+void cursor_up(Buffer *buffer, Cursor *cursor);
+void cursor_down(Buffer *buffer, Cursor *cursor);
 void cursor_to_screen(HANDLE hConsole, Buffer *buffer, Cursor *cursor);
+void get_cursor_pos(Buffer *buffer, Cursor *cursor, int *line, int *col);
+void change_prefer_col(Buffer *buffer, Cursor *cursor);
+
 void editor_render(HANDLE hConsole, Buffer *buffer, Cursor *cursor);
 
 int main() {
@@ -38,6 +45,7 @@ int main() {
     
     Cursor cursor;
     cursor.pos = buffer.length;
+    cursor.prefer_col = 0;
     cursor_to_screen(hConsole, &buffer, &cursor);
 
     while(1) {
@@ -45,13 +53,13 @@ int main() {
         if (c == ESC) break;
         else if (c == BACKSPACE) {
             buffer_backspace(&buffer, cursor.pos);
-            printf("\b \b");
             if (cursor.pos != 0) cursor.pos--;
+            change_prefer_col(&buffer, &cursor);
         }
         else if (c == ENTER) {
             buffer_insert(&buffer, cursor.pos, '\n');
             cursor.pos++;
-            printf("\n");
+            change_prefer_col(&buffer, &cursor);
         }
         else if (c == SPECIAL) {
             int key = _getch();
@@ -59,21 +67,29 @@ int main() {
                 if (cursor.pos == 0) continue;
                 cursor.pos--;
                 cursor_to_screen(hConsole, &buffer, &cursor);
+                change_prefer_col(&buffer, &cursor);
             }
-            if (key == RIGHT) {
+            else if (key == RIGHT) {
                 if (cursor.pos == buffer.length) continue;
                 cursor.pos++;
                 cursor_to_screen(hConsole, &buffer, &cursor);
+                change_prefer_col(&buffer, &cursor);
+            }
+            else if (key == UP) {
+                cursor_up(&buffer, &cursor);
+            }
+            else if (key == DOWN) {
+                cursor_down(&buffer, &cursor);
             }
         }
         else {
             buffer_insert(&buffer, cursor.pos, c);
             cursor.pos++;
+            change_prefer_col(&buffer, &cursor);
         }
         editor_render(hConsole, &buffer, &cursor);
     } 
 
-    buffer_print(&buffer);
     free(buffer.data);
     return 0;
 }
@@ -117,18 +133,23 @@ void buffer_insert(Buffer *buffer, int pos, char c) {
     buffer->length++;
 }
 
-void cursor_to_screen(HANDLE hConsole, Buffer *buffer, Cursor *cursor) {
-    int x = 0, y = 0;
+void get_cursor_pos(Buffer *buffer, Cursor *cursor, int *line, int *col) {
+    *line = *col = 0;
     for (int i = 0; i < cursor->pos; i++) {
         if (buffer->data[i] == '\n') {
-            y++;
-            x = 0;
+            (*line)++;
+            (*col) = 0;
         }
-        else x++;
+        else (*col)++;
     }
+}
+
+void cursor_to_screen(HANDLE hConsole, Buffer *buffer, Cursor *cursor) {
+    int line = 0, col = 0;
+    get_cursor_pos(buffer, cursor, &line, &col);
     COORD pos;
-    pos.X = x;
-    pos.Y = y;
+    pos.X = col;
+    pos.Y = line;
     SetConsoleCursorPosition(hConsole, pos);
 }
 
@@ -136,4 +157,41 @@ void editor_render(HANDLE hConsole, Buffer *buffer, Cursor *cursor) {
     system("cls");
     buffer_print(buffer);
     cursor_to_screen(hConsole, buffer, cursor);
+}
+
+void change_prefer_col(Buffer *buffer, Cursor *cursor) {
+    int line, col;
+    get_cursor_pos(buffer, cursor, &line, &col);
+    cursor->prefer_col = col;
+}
+
+void cursor_up(Buffer *buffer, Cursor *cursor) {
+    int cur_start = cursor->pos;
+    while (cur_start > 0 && buffer->data[cur_start - 1] != '\n') cur_start--;
+    if (cur_start == 0) return;
+    int prev_start = cur_start - 1;
+    while (prev_start > 0 && buffer->data[prev_start - 1] != '\n') prev_start--;
+    
+    int prev_length = 0;
+    while (prev_start + prev_length < buffer->length &&
+       buffer->data[prev_start + prev_length] != '\n') prev_length++;
+    
+    int new_col = cursor->prefer_col;
+    if (new_col > prev_length) new_col = prev_length;
+    cursor->pos = prev_start + new_col;
+}
+
+void cursor_down(Buffer *buffer, Cursor *cursor) {
+    int cur_end = cursor->pos;
+    while (cur_end < buffer->length && buffer->data[cur_end] != '\n') cur_end++;
+    if (cur_end == buffer->length) return;
+    int next_start = cur_end + 1;
+
+    int next_length = 0;
+    while (next_start + next_length < buffer->length &&
+    buffer->data[next_start + next_length] != '\n') next_length++;
+    
+    int new_col = cursor->prefer_col;
+    if (new_col > next_length) new_col = next_length;
+    cursor->pos = next_start + new_col;
 }
