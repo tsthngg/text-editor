@@ -16,6 +16,9 @@
 #define END 79
 #define DELETE_BUTTON 83
 #define TAB 9
+#define CTRL_S 19
+#define CTRL_O 15
+#define CTRL_N 14
 
 typedef struct {
     char *data;
@@ -28,9 +31,12 @@ typedef struct {
     int prefer_col;
 } Cursor;
 
+char filename[256];
+
 int buffer_init(Buffer *buffer);
 void buffer_print(Buffer *buffer);
 void buffer_insert(Buffer *buffer, int pos, char c);
+void clear_buffer(Buffer *buffer);
 
 void backspace(Buffer *buffer, int pos);
 void home(Buffer *buffer, Cursor *cursor);
@@ -45,6 +51,10 @@ void change_prefer_col(Buffer *buffer, Cursor *cursor);
 
 void editor_render(HANDLE hConsole, Buffer *buffer, Cursor *cursor);
 void editor_key_handle(Buffer *buffer, Cursor *cursor, int c);
+
+void save_file(Buffer *buffer);
+void open_file(Buffer *buffer, Cursor *cursor);
+void new_file(Buffer *buffer, Cursor *cursor);
 
 int main() {
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -81,6 +91,13 @@ void editor_key_handle(Buffer *buffer, Cursor *cursor, int c){
         cursor->pos++;
         change_prefer_col(buffer, cursor);
     }
+    else if (c == TAB) {
+        for (int i = 0; i < 4; i++) {
+            buffer_insert(buffer, cursor->pos, ' ');
+            cursor->pos++;
+        }
+        change_prefer_col(buffer, cursor);
+    }
     else if (c == SPECIAL) {
         int key = _getch();
         if (key == LEFT) {
@@ -93,19 +110,18 @@ void editor_key_handle(Buffer *buffer, Cursor *cursor, int c){
             cursor->pos++;
             change_prefer_col(buffer, cursor);
         }
-        else if (key == TAB) {
-            for (int i = 0; i < 4; i++) {
-                buffer_insert(buffer, cursor->pos, ' ');
-                cursor->pos++;
-            }
-            change_prefer_col(buffer, cursor);
-        }
         else if (key == UP) cursor_up(buffer, cursor);
         else if (key == DOWN) cursor_down(buffer, cursor);
         else if (key == HOME) home(buffer, cursor);
         else if (key == END) end(buffer, cursor);
-        else if (key == DELETE_BUTTON) delete_button(buffer, cursor->pos);
+        else if (key == DELETE_BUTTON) {
+            delete_button(buffer, cursor->pos);
+            change_prefer_col(buffer, cursor);
+        }
     }
+    else if (c == CTRL_S) save_file(buffer);
+    else if (c == CTRL_O) open_file(buffer, cursor);
+    else if (c == CTRL_N) new_file(buffer, cursor);
     else {
         buffer_insert(buffer, cursor->pos, c);
         cursor->pos++;
@@ -233,4 +249,87 @@ void delete_button(Buffer *buffer, int pos) {
     if (pos >= buffer->length) return;
     memmove(&buffer->data[pos], &buffer->data[pos + 1], buffer->length - pos);
     buffer->length--;
+}
+
+void save_file(Buffer *buffer) {
+    if (!strlen(filename)) {
+        printf("\nSave as: ");
+        scanf("%255s", filename);
+    }
+    FILE *file = fopen(filename, "w");
+
+    if (file == NULL) {
+        printf("Cannot open file!\n");
+        return;
+    }
+
+    fwrite(buffer->data, 1, buffer->length, file);
+
+    fclose(file);
+
+    printf("\nSaved!\n");
+}
+
+void open_file(Buffer *buffer, Cursor *cursor) {
+    printf("\nOpen file: ");
+    scanf("%255s", filename);
+
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) {
+        printf("Cannot open file!\n");
+        return;
+    }
+
+    clear_buffer(buffer);
+    char c;
+    while ((c = fgetc(file)) != EOF) buffer_insert(buffer, buffer->length, (char) c);
+
+    fclose(file);
+    cursor->pos = cursor->prefer_col = 0;
+}
+
+void new_file(Buffer *buffer, Cursor *cursor) {
+    int c;
+    int count = 0;
+    if (!strlen(filename) && buffer->length != 0) {
+        printf("\nWanna save changes? (Yes = y, No = n)\n");
+        do {
+            scanf("%c", &c);
+            if (c == 'y') {
+                save_file(buffer);
+                break;
+            }
+            else if (c == 'n') break;
+            printf("\nInvalid syntax!\n");
+        } while(1);
+    }
+    else if (strlen(filename)) {    
+        FILE *file = fopen(filename, "r");
+        if (file == NULL) {
+            printf("Cannot open file!\n");
+            return;
+        }   
+        while ((c = fgetc(file)) != EOF) count++;
+        if (count != buffer->length) { //Might change later
+            printf("\nWanna save changes? (Yes = y, No = n)\n");
+            do {
+                scanf("%c", &c);
+                if (c == 'y') {
+                    save_file(buffer);
+                    break;
+                }
+                else if (c == 'n') break;
+                printf("\nInvalid syntax!\n");
+            } while(1);
+        }
+        fclose(file);
+    }
+    clear_buffer(buffer);
+    cursor->pos = cursor->prefer_col = 0;
+    strcpy(filename, "");
+}
+
+void clear_buffer(Buffer *buffer){
+    buffer->length = 0;
+    buffer->data[0] = '\0';
 }
