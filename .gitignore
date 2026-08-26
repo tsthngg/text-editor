@@ -1,0 +1,6 @@
+#Ignore json settings files
+*.json
+!task.json
+
+#ignore output folders
+output/
