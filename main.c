@@ -13,13 +13,29 @@ typedef struct {
 typedef struct {
     int pos;
     int prefer_col;
+    int anchor;
 } Cursor;
+
+// typedef struct {
+//     char *data;
+//     int length;
+//     int cursor_pos;
+// } EditorState;
+
+// typedef struct {
+//     EditorState *states;
+//     int count;
+//     int capacity;
+//     int current;
+// } History;
 
 typedef struct {
     Buffer buffer;
     Cursor cursor;
+    // History history;
     char filename[256];
 } Editor;
+
 
 // ---- Buffer -----
 int buffer_init(Buffer *buffer);
@@ -34,6 +50,8 @@ void editor_render(HDC hdc, Editor *editor);
 void get_cursor_pos(Editor *editor, int *line, int *col);
 void get_cursor_screen_pos(HDC hdc, Editor *editor, int *x, int *y);
 void change_prefer_col(Editor *editor);
+int has_selection(Editor *editor);
+void delete_selection(Editor *editor);
 
 // ---- File ----
 void save_file(HWND hwnd, Editor *editor);
@@ -43,8 +61,8 @@ int open_file_dialog(HWND hwnd, char *filename);
 int save_file_dialog(HWND hwnd, char *filename);
 
 // ---- Functional buttons ----
-void cursor_left(Editor *editor);
-void cursor_right(Editor *editor);
+void cursor_left(Editor *editor, int selecting);
+void cursor_right(Editor *editor, int selecting);
 void cursor_up(Editor *editor);
 void cursor_down(Editor *editor);
 void backspace(Editor *editor);
@@ -52,6 +70,12 @@ void delete_button(Editor *editor);
 void tab_button(Editor *editor);
 void home(Editor *editor);
 void end(Editor *editor);
+void copy_selection(Editor *editor);
+void paste_clipboard(Editor *editor);
+// void history_init(History *history);
+// void save_state(Editor *editor);
+// void undo(Editor *editor);
+// void redo(Editor *editor);
 
 // ---- Windows procedure ----
 LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
@@ -92,8 +116,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             if (c == '\r') c = '\n';
             else if (c == '\b') return 0;
             else if (c == '\t') return 0;
-            else if (c < 32 && c != '\n') return 0;
-            else insert_char(editor, c);
+            else if (c < 32) return 0;
+            insert_char(editor, c);
 
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;   
@@ -101,8 +125,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
         case WM_KEYDOWN:
         {
             if (wParam == VK_BACK) backspace(editor);
-            else if (wParam == VK_LEFT) cursor_left(editor);
-            else if (wParam == VK_RIGHT) cursor_right(editor);
+            else if (wParam == VK_LEFT) cursor_left(editor, GetKeyState(VK_SHIFT) & 0x8000);
+            else if (wParam == VK_RIGHT) cursor_right(editor, GetKeyState(VK_SHIFT) & 0x8000);
             else if (wParam == VK_UP) cursor_up(editor);
             else if (wParam == VK_DOWN) cursor_down(editor);
             else if (wParam == VK_DELETE) delete_button(editor);
@@ -112,7 +136,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             else if (wParam == 'S' && (GetKeyState(VK_CONTROL) & 0x8000)) save_file(hwnd, editor);
             else if (wParam == 'O' && (GetKeyState(VK_CONTROL) & 0x8000)) load_file(hwnd, editor);
             else if (wParam == 'N' && (GetKeyState(VK_CONTROL) & 0x8000)) new_file(editor);
-
+            else if (wParam == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                editor->cursor.anchor = 0;
+                editor->cursor.pos = editor->buffer.length;
+                change_prefer_col(editor);
+            }
+            else if (wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) copy_selection(editor);
+            else if (wParam == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) paste_clipboard(editor);
+            else if (wParam == 'X' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                copy_selection(editor);
+                delete_selection(editor);
+            }
+            else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) redo(editor);
+            else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) undo(editor);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -128,7 +164,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (!buffer_init(&editor.buffer)) return 1;
     editor.cursor.pos = 0;
     editor.cursor.prefer_col = 0;
+    editor.cursor.anchor = 0;
     editor.filename[0] = '\0';
+    // history_init(&editor.history);
 
     WNDCLASS wc = {0};
 
@@ -235,24 +273,47 @@ void change_prefer_col(Editor *editor) {
     editor->cursor.prefer_col = col;
 }
 
+int has_selection(Editor *editor) {
+    return editor->cursor.pos != editor->cursor.anchor;
+}
+
+void delete_selection(Editor *editor) {
+    int start = editor->cursor.anchor < editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
+    int end = editor->cursor.anchor > editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
+    memmove(&editor->buffer.data[start], &editor->buffer.data[end], editor->buffer.length - end + 1);
+    editor->buffer.length -= (end - start);
+    editor->cursor.pos = start;
+    editor->cursor.anchor = start;
+    change_prefer_col(editor);
+}
+
 void backspace(Editor *editor) {
+    if (has_selection(editor)) {
+        delete_selection(editor);
+        return;
+    }
     if (editor->cursor.pos == 0 || editor->buffer.length == 0) return;
     memmove(&editor->buffer.data[editor->cursor.pos-1], &editor->buffer.data[editor->cursor.pos], editor->buffer.length - editor->cursor.pos + 1);
     editor->buffer.length--;
     editor->cursor.pos--;
+    editor->cursor.anchor = editor->cursor.pos;
     change_prefer_col(editor);
 }
 
-void cursor_left(Editor *editor) {
-    if (editor->cursor.pos > 0) {
-        editor->cursor.pos--;
+void cursor_left(Editor *editor, int selecting) {
+    if (editor->cursor.pos > 0) editor->cursor.pos--;
+
+    if (!selecting) {
+        editor->cursor.anchor = editor->cursor.pos;
         change_prefer_col(editor);
     }
 }
 
-void cursor_right(Editor *editor) {
-    if (editor->cursor.pos < editor->buffer.length) {
-        editor->cursor.pos++;
+void cursor_right(Editor *editor, int selecting) {
+    if (editor->cursor.pos < editor->buffer.length) editor->cursor.pos++;
+
+    if (!selecting) {
+        editor->cursor.anchor = editor->cursor.pos;
         change_prefer_col(editor);
     }
 }
@@ -289,6 +350,10 @@ void cursor_down(Editor *editor) {
 }
 
 void delete_button(Editor *editor) {
+    if (has_selection(editor)) {
+        delete_selection(editor);
+        return;
+    }
     if (editor->cursor.pos >= editor->buffer.length) return;
     memmove(&editor->buffer.data[editor->cursor.pos], &editor->buffer.data[editor->cursor.pos + 1], editor->buffer.length - editor->cursor.pos);
     editor->buffer.length--;
@@ -300,6 +365,7 @@ void tab_button(Editor *editor) {
             break;
         }
         editor->cursor.pos++;
+        editor->cursor.anchor = editor->cursor.pos;
     }
     change_prefer_col(editor);
 }
@@ -308,6 +374,7 @@ void home(Editor *editor) {
     int start = editor->cursor.pos;
     while (start > 0 && editor->buffer.data[start - 1] != '\n') start--;
     editor->cursor.pos = start;
+    editor->cursor.anchor = start;
     change_prefer_col(editor);
 }
 
@@ -315,19 +382,27 @@ void end(Editor *editor) {
     int end = editor->cursor.pos;
     while (end < editor->buffer.length && editor->buffer.data[end] != '\n') end++;
     editor->cursor.pos = end;
+    editor->cursor.anchor = end;
     change_prefer_col(editor);
 }
 
 void insert_char(Editor *editor, char c) {
     if (buffer_insert(&editor->buffer, editor->cursor.pos, c)) {
         editor->cursor.pos++;
+        editor->cursor.anchor = editor->cursor.pos;
         change_prefer_col(editor);
     }
 }
 
 void editor_render(HDC hdc, Editor *editor) {
+    SetBkMode(hdc, TRANSPARENT);
+
     int x = 10;
     int y = 10;
+    int start = editor->cursor.anchor < editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
+    int end = editor->cursor.anchor > editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
+    
+    HBRUSH hbr = CreateSolidBrush(GetSysColor(COLOR_HIGHLIGHT));
 
     for (int i = 0; i < editor->buffer.length; i++) {
         if (editor->buffer.data[i] == '\n') {
@@ -336,15 +411,26 @@ void editor_render(HDC hdc, Editor *editor) {
             continue;
         }
 
-        TextOutA(hdc, x, y, &editor->buffer.data[i], 1);
         SIZE size;
         GetTextExtentPoint32A(hdc, &editor->buffer.data[i], 1, &size);
 
+        if (i >= start && i < end) {
+            RECT rect = {x, y, x + size.cx, y + 20};
+            FillRect(hdc, &rect, hbr);
+            SetTextColor(hdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
+        }
+        else {
+            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        }
+        TextOutA(hdc, x, y, &editor->buffer.data[i], 1);
         x += size.cx;
     }
+    DeleteObject(hbr);
+
     get_cursor_screen_pos(hdc, editor, &x, &y);
     MoveToEx(hdc, x, y, NULL);
     LineTo(hdc, x, y + 20);
+    
 }
 
 void save_file(HWND hwnd, Editor *editor) {
@@ -459,3 +545,123 @@ void new_file(Editor *editor) {
     editor->cursor.pos = editor->cursor.prefer_col = 0;
     editor->filename[0] = '\0';
 }
+
+void copy_selection(Editor *editor) {
+    if (!has_selection(editor)) return;
+
+    int start = editor->cursor.anchor < editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
+    int end = editor->cursor.anchor > editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
+    int length = end - start;
+
+    char *buffer = malloc(length + 1);
+    if (buffer == NULL) return;
+
+    memcpy(buffer, &editor->buffer.data[start], length);
+    buffer[length] = '\0';
+
+    if (OpenClipboard(NULL)) {
+        EmptyClipboard();
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, length + 1);
+        if (hMem) {
+            memcpy(GlobalLock(hMem), buffer, length + 1);
+            GlobalUnlock(hMem);
+            SetClipboardData(CF_TEXT, hMem);
+        }
+        CloseClipboard();
+    }
+
+    free(buffer);
+}
+
+void paste_clipboard(Editor *editor) {
+    if (!OpenClipboard(NULL)) return;
+
+    HANDLE hData = GetClipboardData(CF_TEXT);
+    if (hData == NULL) {
+        CloseClipboard();
+        return;
+    }
+
+    char *clipboardText = (char *)GlobalLock(hData);
+    if (clipboardText == NULL) {
+        CloseClipboard();
+        return;
+    }
+
+    int length = strlen(clipboardText);
+    for (int i = 0; i < length; i++) {
+        insert_char(editor, clipboardText[i]);
+    }
+
+    GlobalUnlock(hData);
+    CloseClipboard();
+}
+
+// void history_init(History *history) {
+//     history->states = malloc(sizeof(EditorState) * 10);
+//     for (int i = 0; i < 10; i++) {
+//         history->states[i].data = NULL;
+//         history->states[i].length = 0;
+//         history->states[i].cursor_pos = 0;
+//     }
+//     if (history->states == NULL) {
+//         printf("Memory allocation failed!");
+//         exit(1);
+//     }
+//     history->count = 0;
+//     history->capacity = 10;
+//     history->current = -1;
+// }
+
+// void save_state(Editor *editor) {
+//     if (editor->history.current < editor->history.count - 1) {
+//         for (int i = editor->history.current + 1; i < editor->history.count; i++) {
+//             free(editor->history.states[i].data);
+//         }
+//         editor->history.count = editor->history.current + 1;
+//     }
+
+//     if (editor->history.count >= editor->history.capacity) {
+//         editor->history.capacity *= 2;
+//         editor->history.states = realloc(editor->history.states, sizeof(EditorState) * editor->history.capacity);
+//     }
+
+//     EditorState *state = &editor->history.states[editor->history.count];
+//     state->length = editor->buffer.length;
+//     state->data = malloc(state->length + 1);
+//     memcpy(state->data, editor->buffer.data, state->length + 1);
+//     state->cursor_pos = editor->cursor.pos;
+
+//     editor->history.current++;
+//     editor->history.count++;
+// }
+
+// void undo(Editor *editor) {
+//     if (editor->history.current <= 0) return;
+
+//     editor->history.current--;
+//     EditorState *state = &editor->history.states[editor->history.current];
+
+//     clear_buffer(&editor->buffer);
+//     buffer_insert(&editor->buffer, 0, '\0');
+//     memcpy(editor->buffer.data, state->data, state->length + 1);
+//     editor->buffer.length = state->length;
+//     editor->cursor.pos = state->cursor_pos;
+//     editor->cursor.anchor = state->cursor_pos;
+//     change_prefer_col(editor);
+// }
+
+// void redo(Editor *editor) {
+//     if (editor->history.current >= editor->history.count - 1) return;
+
+//     editor->history.current++;
+//     EditorState *state = &editor->history.states[editor->history.current];
+
+//     clear_buffer(&editor->buffer);
+//     buffer_insert(&editor->buffer, 0, '\0');
+//     memcpy(editor->buffer.data, state->data, state->length + 1);
+//     editor->buffer.length = state->length;
+//     editor->cursor.pos = state->cursor_pos;
+//     editor->cursor.anchor = state->cursor_pos;
+//     change_prefer_col(editor);
+// }

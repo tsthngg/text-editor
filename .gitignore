@@ -1,6 +1,5 @@
-#Ignore json settings files
-*.json
-!task.json
+#Ignore vscode settings files
+.vscode/
 
 #ignore output folders
 output/
