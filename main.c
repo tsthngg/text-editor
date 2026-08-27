@@ -63,8 +63,8 @@ int save_file_dialog(HWND hwnd, char *filename);
 // ---- Functional buttons ----
 void cursor_left(Editor *editor, int selecting);
 void cursor_right(Editor *editor, int selecting);
-void cursor_up(Editor *editor);
-void cursor_down(Editor *editor);
+void cursor_up(Editor *editor, int selecting);
+void cursor_down(Editor *editor, int selecting);
 void backspace(Editor *editor);
 void delete_button(Editor *editor);
 void tab_button(Editor *editor);
@@ -127,8 +127,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             if (wParam == VK_BACK) backspace(editor);
             else if (wParam == VK_LEFT) cursor_left(editor, GetKeyState(VK_SHIFT) & 0x8000);
             else if (wParam == VK_RIGHT) cursor_right(editor, GetKeyState(VK_SHIFT) & 0x8000);
-            else if (wParam == VK_UP) cursor_up(editor);
-            else if (wParam == VK_DOWN) cursor_down(editor);
+            else if (wParam == VK_UP) cursor_up(editor, GetKeyState(VK_SHIFT) & 0x8000);
+            else if (wParam == VK_DOWN) cursor_down(editor, GetKeyState(VK_SHIFT) & 0x8000);
             else if (wParam == VK_DELETE) delete_button(editor);
             else if (wParam == VK_TAB) tab_button(editor);
             else if (wParam == VK_HOME) home(editor);
@@ -147,8 +147,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
                 copy_selection(editor);
                 delete_selection(editor);
             }
-            else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) redo(editor);
-            else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) undo(editor);
+            // else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) redo(editor);
+            // else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) undo(editor);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -318,23 +318,26 @@ void cursor_right(Editor *editor, int selecting) {
     }
 }
 
-void cursor_up(Editor *editor) {
+void cursor_up(Editor *editor, int selecting) {
     int cur_start = editor->cursor.pos;
     while (cur_start > 0 && editor->buffer.data[cur_start - 1] != '\n') cur_start--;
     if (cur_start == 0) return;
-    int prev_start = cur_start - 1;
+    int prev_end = cur_start - 1;
+
+    int prev_start = prev_end;
     while (prev_start > 0 && editor->buffer.data[prev_start - 1] != '\n') prev_start--;
-    
-    int prev_length = 0;
-    while (prev_start + prev_length < editor->buffer.length &&
-       editor->buffer.data[prev_start + prev_length] != '\n') prev_length++;
+
+    int prev_length = prev_end - prev_start;
     
     int new_col = editor->cursor.prefer_col;
     if (new_col > prev_length) new_col = prev_length;
     editor->cursor.pos = prev_start + new_col;
+    if (!selecting) {
+        editor->cursor.anchor = editor->cursor.pos;
+    }
 }
 
-void cursor_down(Editor *editor) {
+void cursor_down(Editor *editor, int selecting) {
     int cur_end = editor->cursor.pos;
     while (cur_end < editor->buffer.length && editor->buffer.data[cur_end] != '\n') cur_end++;
     if (cur_end == editor->buffer.length) return;
@@ -347,6 +350,9 @@ void cursor_down(Editor *editor) {
     int new_col = editor->cursor.prefer_col;
     if (new_col > next_length) new_col = next_length;
     editor->cursor.pos = next_start + new_col;
+    if (!selecting) {
+        editor->cursor.anchor = editor->cursor.pos;
+    }
 }
 
 void delete_button(Editor *editor) {
