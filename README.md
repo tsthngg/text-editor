@@ -8,7 +8,7 @@ This is a minimal text editor just like Notepad, Microsoft Word but with less fu
 - Basic text editing
 - Cursor navigation & selection
 - Work perfectly fine with files (Ctrl+S/Ctrl+O/Ctrl+N)
-- Undo/Redo history (currently working on)
+- Undo/Redo history
 
 ## 🚀 Getting Started
 ### Prerequisites
@@ -40,6 +40,8 @@ gcc main.c -o editor.exe -luser32 -lgdi32 -lcomdlg32
 |Ctrl+C|Copy selection|
 |Ctrl+X|Cut selection|
 |Ctrl+V|Paste|
+|Ctrl+Z|Undo|
+|Ctrl+Shift+Z|Redo|
 |Shift + Arrow keys|Extend selection|
 |Tab|Insert 4 spaces|
 

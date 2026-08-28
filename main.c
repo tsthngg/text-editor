@@ -16,23 +16,23 @@ typedef struct {
     int anchor;
 } Cursor;
 
-// typedef struct {
-//     char *data;
-//     int length;
-//     int cursor_pos;
-// } EditorState;
+typedef struct {
+    char *data;
+    int length;
+    int cursor_pos;
+} EditorState;
 
-// typedef struct {
-//     EditorState *states;
-//     int count;
-//     int capacity;
-//     int current;
-// } History;
+typedef struct {
+    EditorState *states;
+    int count;
+    int capacity;
+    int current;
+} History;
 
 typedef struct {
     Buffer buffer;
     Cursor cursor;
-    // History history;
+    History history;
     char filename[256];
 } Editor;
 
@@ -72,10 +72,11 @@ void home(Editor *editor);
 void end(Editor *editor);
 void copy_selection(Editor *editor);
 void paste_clipboard(Editor *editor);
-// void history_init(History *history);
-// void save_state(Editor *editor);
-// void undo(Editor *editor);
-// void redo(Editor *editor);
+void history_init(History *history);
+void free_history(History *history);
+void save_state(Editor *editor);
+void undo(Editor *editor);
+void redo(Editor *editor);
 
 // ---- Windows procedure ----
 LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
@@ -146,9 +147,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             else if (wParam == 'X' && (GetKeyState(VK_CONTROL) & 0x8000)) {
                 copy_selection(editor);
                 delete_selection(editor);
+                save_state(editor);
             }
-            // else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) redo(editor);
-            // else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) undo(editor);
+            else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) redo(editor);
+            else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) undo(editor);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -166,8 +168,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     editor.cursor.prefer_col = 0;
     editor.cursor.anchor = 0;
     editor.filename[0] = '\0';
-    // history_init(&editor.history);
-
+    history_init(&editor.history);
+    save_state(&editor);
     WNDCLASS wc = {0};
 
     wc.lpfnWndProc = WndProc;
@@ -203,6 +205,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         DispatchMessage(&msg);
     }
     free(editor.buffer.data);
+    free_history(&editor.history);
     return 0;
 }
 
@@ -298,6 +301,7 @@ void backspace(Editor *editor) {
     editor->cursor.pos--;
     editor->cursor.anchor = editor->cursor.pos;
     change_prefer_col(editor);
+    save_state(editor);
 }
 
 void cursor_left(Editor *editor, int selecting) {
@@ -363,6 +367,7 @@ void delete_button(Editor *editor) {
     if (editor->cursor.pos >= editor->buffer.length) return;
     memmove(&editor->buffer.data[editor->cursor.pos], &editor->buffer.data[editor->cursor.pos + 1], editor->buffer.length - editor->cursor.pos);
     editor->buffer.length--;
+    save_state(editor);
 }
 
 void tab_button(Editor *editor) {
@@ -374,6 +379,7 @@ void tab_button(Editor *editor) {
         editor->cursor.anchor = editor->cursor.pos;
     }
     change_prefer_col(editor);
+    save_state(editor);
 }
 
 void home(Editor *editor) {
@@ -397,6 +403,7 @@ void insert_char(Editor *editor, char c) {
         editor->cursor.pos++;
         editor->cursor.anchor = editor->cursor.pos;
         change_prefer_col(editor);
+        save_state(editor);
     }
 }
 
@@ -601,73 +608,75 @@ void paste_clipboard(Editor *editor) {
 
     GlobalUnlock(hData);
     CloseClipboard();
+    save_state(editor);
 }
 
-// void history_init(History *history) {
-//     history->states = malloc(sizeof(EditorState) * 10);
-//     for (int i = 0; i < 10; i++) {
-//         history->states[i].data = NULL;
-//         history->states[i].length = 0;
-//         history->states[i].cursor_pos = 0;
-//     }
-//     if (history->states == NULL) {
-//         printf("Memory allocation failed!");
-//         exit(1);
-//     }
-//     history->count = 0;
-//     history->capacity = 10;
-//     history->current = -1;
-// }
+void history_init(History *history) {
+    history->states = malloc(sizeof(EditorState) * 10);
+    if (history->states == NULL) {
+        printf("Memory allocation failed!");
+        exit(1);
+    }
+    history->count = 0;
+    history->capacity = 10;
+    history->current = -1;
+}
 
-// void save_state(Editor *editor) {
-//     if (editor->history.current < editor->history.count - 1) {
-//         for (int i = editor->history.current + 1; i < editor->history.count; i++) {
-//             free(editor->history.states[i].data);
-//         }
-//         editor->history.count = editor->history.current + 1;
-//     }
+void free_history(History *history) {
+    for (int i = 0; i < history->count; i++) {
+        free(history->states[i].data);
+    }
+    free(history->states);
+}
 
-//     if (editor->history.count >= editor->history.capacity) {
-//         editor->history.capacity *= 2;
-//         editor->history.states = realloc(editor->history.states, sizeof(EditorState) * editor->history.capacity);
-//     }
+void save_state(Editor *editor) {
+    if (editor->history.current < editor->history.count - 1) {
+        for (int i = editor->history.current + 1; i < editor->history.count; i++) {
+            free(editor->history.states[i].data);
+        }
+        editor->history.count = editor->history.current + 1;
+    }
 
-//     EditorState *state = &editor->history.states[editor->history.count];
-//     state->length = editor->buffer.length;
-//     state->data = malloc(state->length + 1);
-//     memcpy(state->data, editor->buffer.data, state->length + 1);
-//     state->cursor_pos = editor->cursor.pos;
+    if (editor->history.count >= editor->history.capacity) {
+        editor->history.capacity *= 2;
+        editor->history.states = realloc(editor->history.states, sizeof(EditorState) * editor->history.capacity);
+    }
 
-//     editor->history.current++;
-//     editor->history.count++;
-// }
+    EditorState *state = &editor->history.states[editor->history.count];
+    state->length = editor->buffer.length;
+    state->data = malloc(state->length + 1);
+    memcpy(state->data, editor->buffer.data, state->length + 1);
+    state->cursor_pos = editor->cursor.pos;
 
-// void undo(Editor *editor) {
-//     if (editor->history.current <= 0) return;
+    editor->history.current++;
+    editor->history.count++;
+}
 
-//     editor->history.current--;
-//     EditorState *state = &editor->history.states[editor->history.current];
+void undo(Editor *editor) {
+    if (editor->history.current <= 0) return;
 
-//     clear_buffer(&editor->buffer);
-//     buffer_insert(&editor->buffer, 0, '\0');
-//     memcpy(editor->buffer.data, state->data, state->length + 1);
-//     editor->buffer.length = state->length;
-//     editor->cursor.pos = state->cursor_pos;
-//     editor->cursor.anchor = state->cursor_pos;
-//     change_prefer_col(editor);
-// }
+    editor->history.current--;
+    EditorState *state = &editor->history.states[editor->history.current];
 
-// void redo(Editor *editor) {
-//     if (editor->history.current >= editor->history.count - 1) return;
+    clear_buffer(&editor->buffer);
+    memcpy(editor->buffer.data, state->data, state->length + 1);
+    editor->buffer.length = state->length;
+    editor->cursor.pos = state->cursor_pos;
+    editor->cursor.anchor = state->cursor_pos;
+    change_prefer_col(editor);
+}
 
-//     editor->history.current++;
-//     EditorState *state = &editor->history.states[editor->history.current];
+void redo(Editor *editor) {
+    if (editor->history.current >= editor->history.count - 1) return;
 
-//     clear_buffer(&editor->buffer);
-//     buffer_insert(&editor->buffer, 0, '\0');
-//     memcpy(editor->buffer.data, state->data, state->length + 1);
-//     editor->buffer.length = state->length;
-//     editor->cursor.pos = state->cursor_pos;
-//     editor->cursor.anchor = state->cursor_pos;
-//     change_prefer_col(editor);
-// }
+    editor->history.current++;
+    EditorState *state = &editor->history.states[editor->history.current];
+
+    clear_buffer(&editor->buffer);
+    buffer_insert(&editor->buffer, 0, '\0');
+    memcpy(editor->buffer.data, state->data, state->length + 1);
+    editor->buffer.length = state->length;
+    editor->cursor.pos = state->cursor_pos;
+    editor->cursor.anchor = state->cursor_pos;
+    change_prefer_col(editor);
+}
