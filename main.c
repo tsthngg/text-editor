@@ -14,6 +14,7 @@ typedef struct {
     int pos;
     int prefer_col;
     int anchor;
+    int selecting;
 } Cursor;
 
 typedef struct {
@@ -33,6 +34,7 @@ typedef struct {
     Buffer buffer;
     Cursor cursor;
     History history;
+    int scroll_y;
     char filename[256];
 } Editor;
 
@@ -44,14 +46,21 @@ void clear_buffer(Buffer *buffer);
 
 // ---- Display ----
 void insert_char(Editor *editor, char c);
-void editor_render(HDC hdc, Editor *editor);
+void editor_render(HWND hwnd, HDC hdc, Editor *editor);
+int get_word_end(Editor *editor, int start);
 
 // ---- Cursor ----
+void cursor_init(Cursor *cursor);
 void get_cursor_pos(Editor *editor, int *line, int *col);
-void get_cursor_screen_pos(HDC hdc, Editor *editor, int *x, int *y);
+void get_cursor_screen_pos(HWND hwnd, HDC hdc, Editor *editor, int *x, int *y);
 void change_prefer_col(Editor *editor);
 int has_selection(Editor *editor);
 void delete_selection(Editor *editor);
+int get_cursor_fr_mouse(HWND hwnd, HDC hdc, Editor *editor, int mouse_x, int mouse_y);
+int is_mouse_on_text(Editor *editor, int mouse_x, int mouse_y);
+int get_line_count(Editor *editor);
+void update_scrollbar(HWND hwnd, Editor *editor);
+void ensure_cursor_visible(HWND hwnd, Editor *editor);
 
 // ---- File ----
 void save_file(HWND hwnd, Editor *editor);
@@ -97,6 +106,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             PostQuitMessage(0);
             return 0;
         }
+        case WM_SETCURSOR:
+        {
+            if (LOWORD(lParam) == HTVSCROLL) {
+                SetCursor(LoadCursor(NULL, IDC_HAND));
+                return TRUE;
+            }
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            if (is_mouse_on_text(editor, pt.x, pt.y)) SetCursor(LoadCursor(NULL, IDC_IBEAM));
+            else SetCursor(LoadCursor(NULL, IDC_ARROW));
+            return TRUE;
+        }
+        case WM_SIZE:
+        {
+            update_scrollbar(hwnd, editor);
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
         case WM_PAINT:
         {
             PAINTSTRUCT ps;
@@ -106,8 +134,100 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             GetClientRect(hwnd, &rect);
             FillRect(hdc, &rect, (HBRUSH)(COLOR_WINDOW + 1));
 
-            editor_render(hdc, editor);
+            editor_render(hwnd, hdc, editor);
             EndPaint(hwnd, &ps);
+
+            return 0;
+        }
+        case WM_VSCROLL:
+        {
+            SCROLLINFO si = {0};
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+
+            GetScrollInfo(hwnd, SB_VERT, &si);
+
+            int old_pos = si.nPos;
+
+            switch (LOWORD(wParam)) {
+
+                case SB_LINEUP:
+                    si.nPos -= 1;
+                    break;
+
+                case SB_LINEDOWN:
+                    si.nPos += 1;
+                    break;
+
+                case SB_PAGEUP:
+                    si.nPos -= si.nPage;
+                    break;
+
+                case SB_PAGEDOWN:
+                    si.nPos += si.nPage;
+                    break;
+
+                case SB_THUMBTRACK:
+                    si.nPos = si.nTrackPos;
+                    break;
+
+                case SB_TOP:
+                    si.nPos = si.nMin;
+                    break;
+
+                case SB_BOTTOM:
+                    si.nPos = si.nMax - si.nPage;
+                    break;
+            }
+
+            int max_scroll = si.nMax - si.nPage;
+
+            if (max_scroll < 0)
+                max_scroll = 0;
+
+            if (si.nPos < si.nMin)
+                si.nPos = si.nMin;
+
+            if (si.nPos > max_scroll)
+                si.nPos = max_scroll;
+
+            si.fMask = SIF_POS;
+            SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+
+            GetScrollInfo(hwnd, SB_VERT, &si);
+
+            if (si.nPos != old_pos) {
+                editor->scroll_y = si.nPos;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+
+            return 0;
+        }
+        case WM_MOUSEWHEEL:
+        {
+            int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+
+            if (delta > 0) editor->scroll_y -= 3;
+            else if (delta < 0) editor->scroll_y += 3;
+
+            SCROLLINFO si = {0};
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+
+            GetScrollInfo(hwnd, SB_VERT, &si);
+
+            if (editor->scroll_y < si.nMin) editor->scroll_y = si.nMin;
+
+            if (editor->scroll_y > si.nMax - (int)si.nPage + 1) editor->scroll_y = si.nMax - si.nPage + 1;
+
+            if (editor->scroll_y < 0) editor->scroll_y = 0;
+
+            si.fMask = SIF_POS;
+            si.nPos = editor->scroll_y;
+
+            SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+
+            InvalidateRect(hwnd, NULL, TRUE);
 
             return 0;
         }
@@ -119,7 +239,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             else if (c == '\t') return 0;
             else if (c < 32) return 0;
             insert_char(editor, c);
-
+            update_scrollbar(hwnd, editor);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;   
         }
@@ -151,7 +271,44 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
             }
             else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) redo(editor);
             else if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) undo(editor);
+            
+            ensure_cursor_visible(hwnd, editor);
             InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+
+        case WM_LBUTTONDOWN:
+        {
+            SetCapture(hwnd);
+            int mouse_x = LOWORD(lParam);
+            int mouse_y = HIWORD(lParam);
+            HDC hdc = GetDC(hwnd);
+            editor->cursor.pos = get_cursor_fr_mouse(hwnd, hdc, editor, mouse_x, mouse_y);
+            editor->cursor.anchor = editor->cursor.pos;
+            editor->cursor.selecting = 1;
+            change_prefer_col(editor);
+            ReleaseDC(hwnd, hdc);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+
+        case WM_MOUSEMOVE:
+        {
+            if (editor->cursor.selecting) {
+                int mouse_x = LOWORD(lParam);
+                int mouse_y = HIWORD(lParam);
+                HDC hdc = GetDC(hwnd);
+                editor->cursor.pos = get_cursor_fr_mouse(hwnd, hdc, editor, mouse_x, mouse_y);
+                ReleaseDC(hwnd, hdc);
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_LBUTTONUP:
+        {
+            editor->cursor.selecting = 0;
+            ReleaseCapture();
             return 0;
         }
 
@@ -164,9 +321,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     Editor editor;
     if (!buffer_init(&editor.buffer)) return 1;
-    editor.cursor.pos = 0;
-    editor.cursor.prefer_col = 0;
-    editor.cursor.anchor = 0;
+    cursor_init(&editor.cursor);
+    editor.scroll_y = 0;
     editor.filename[0] = '\0';
     history_init(&editor.history);
     save_state(&editor);
@@ -181,7 +337,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     HWND hwnd = CreateWindow(
         "Tedt",
         "Text Editor",
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_VSCROLL,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         800,
@@ -191,10 +347,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         hInstance,
         &editor
     );
+    update_scrollbar(hwnd, &editor);
     if (hwnd == NULL) {
         MessageBox(NULL, "CreateWindow failed!", "Error", MB_OK);
         return 1;
     }
+    update_scrollbar(hwnd, &editor);
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
@@ -219,6 +377,13 @@ int buffer_init(Buffer *buffer) {
     buffer->cap = 16;
     buffer->data[0] = '\0';
     return 1;
+}
+
+void cursor_init(Cursor *cursor) {
+    cursor->pos = 0;
+    cursor->prefer_col = 0;
+    cursor->anchor = 0;
+    cursor->selecting = 0;
 }
 
 int buffer_insert(Buffer *buffer, int pos, char c) {
@@ -254,18 +419,48 @@ void get_cursor_pos(Editor *editor, int *line, int *col) {
     }
 }
 
-void get_cursor_screen_pos(HDC hdc, Editor *editor, int *x, int *y) {
+void get_cursor_screen_pos(HWND hwnd, HDC hdc, Editor *editor, int *x, int *y) {
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+
+    int max_x = rect.right - 10;
+
     *x = 10;
-    *y = 10;
+    *y = 10 - editor->scroll_y * 20;
+
     for (int i = 0; i < editor->cursor.pos; i++) {
         if (editor->buffer.data[i] == '\n') {
             *x = 10;
             *y += 20;
             continue;
         }
-
         SIZE size;
         GetTextExtentPoint32A(hdc, &editor->buffer.data[i], 1, &size);
+
+        if (i == 0 || editor->buffer.data[i - 1] == ' ' || editor->buffer.data[i - 1] == '\n') {
+
+            int word_end = get_word_end(editor, i);
+
+            int word_width = 0;
+
+            for (int j = i; j < word_end; j++) {
+                SIZE s;
+                GetTextExtentPoint32A(hdc, &editor->buffer.data[j], 1, &s);
+                word_width += s.cx;
+            }
+
+            if (*x != 10 &&
+                *x + word_width > max_x) {
+
+                *x = 10;
+                *y += 20;
+            }
+        }
+        if (*x + size.cx > max_x) {
+            *x = 10;
+            *y += 20;
+        }
+
         *x += size.cx;
     }
 }
@@ -274,6 +469,144 @@ void change_prefer_col(Editor *editor) {
     int line, col;
     get_cursor_pos(editor, &line, &col);
     editor->cursor.prefer_col = col;
+}
+
+int get_cursor_fr_mouse(HWND hwnd, HDC hdc, Editor *editor, int mouse_x, int mouse_y) {
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+
+    int max_x = rect.right - 10;
+
+    int x = 10;
+    int y = 10 - editor->scroll_y * 20;
+
+    for (int i = 0; i < editor->buffer.length; i++) {
+        if (editor->buffer.data[i] == '\n') {
+
+            if (mouse_y >= y &&
+                mouse_y < y + 20) {
+
+                return i;
+            }
+
+            x = 10;
+            y += 20;
+
+            continue;
+        }
+        SIZE size;
+
+        GetTextExtentPoint32A(hdc, &editor->buffer.data[i], 1, &size);
+
+        if (i == 0 || editor->buffer.data[i - 1] == ' ' || editor->buffer.data[i - 1] == '\n') {
+
+            int word_end = get_word_end(editor, i);
+
+            int word_width = 0;
+
+            for (int j = i; j < word_end; j++) {
+                SIZE s;
+                GetTextExtentPoint32A(hdc, &editor->buffer.data[j], 1, &s);
+                word_width += s.cx;
+            }
+
+            if (x != 10 && x + word_width > max_x) {
+                x = 10;
+                y += 20;
+            }
+        }
+
+        if (x + size.cx > max_x) {
+            x = 10;
+            y += 20;
+        }
+
+        if (mouse_y >= y && mouse_y < y + 20) {
+            if (mouse_x < x + size.cx / 2) return i;
+            return i + 1;
+        }
+
+        x += size.cx;
+    }
+
+    if (mouse_y >= y && mouse_y < y + 20) return editor->buffer.length;
+    return editor->buffer.length;
+}
+
+int is_mouse_on_text(Editor *editor, int mouse_x, int mouse_y)
+{
+    int y = 10 - editor->scroll_y * 20;
+    for (int i = 0; i < editor->buffer.length; i++) {
+        if (editor->buffer.data[i] == '\n') {
+            y += 20;
+            continue;
+        }
+        if (mouse_y >= y && mouse_y < y + 20) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int get_line_count(Editor *editor) {
+    int count = 1;
+    for (int i = 0; i < editor->buffer.length; i++) {
+        if (editor->buffer.data[i] == '\n') count++;
+    }
+    return count;
+}
+
+int get_word_end(Editor *editor, int start) {
+    int i = start;
+    while (i < editor->buffer.length &&
+           editor->buffer.data[i] != ' ' &&
+           editor->buffer.data[i] != '\n' &&
+           editor->buffer.data[i] != '\t') {
+        i++;
+    }
+    return i;
+}
+
+void update_scrollbar(HWND hwnd, Editor *editor) {
+    int lines = get_line_count(editor);
+
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+
+    int visible_lines = rect.bottom / 20;
+
+    SCROLLINFO si = {0};
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = lines;
+    si.nPage = visible_lines;
+
+    int max_scroll = lines - visible_lines;
+    if (max_scroll < 0) max_scroll = 0;
+    if (editor->scroll_y > max_scroll) editor->scroll_y = max_scroll;
+    si.nPos = editor->scroll_y;
+
+    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+}
+
+void ensure_cursor_visible(HWND hwnd, Editor *editor) {
+    int line, col;
+    get_cursor_pos(editor, &line, &col);
+
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+
+    int visible_lines = rect.bottom / 20;
+
+    if (line < editor->scroll_y) {
+        editor->scroll_y = line;
+    }
+    else if (line >= editor->scroll_y + visible_lines) {
+        editor->scroll_y = line - visible_lines + 1;
+    }
+
+    update_scrollbar(hwnd, editor);
 }
 
 int has_selection(Editor *editor) {
@@ -407,15 +740,24 @@ void insert_char(Editor *editor, char c) {
     }
 }
 
-void editor_render(HDC hdc, Editor *editor) {
+void editor_render(HWND hwnd, HDC hdc, Editor *editor) {
     SetBkMode(hdc, TRANSPARENT);
 
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+
+    int max_x = rect.right - 10;
+
     int x = 10;
-    int y = 10;
+    int y = 10 - editor->scroll_y * 20;
+
     int start = editor->cursor.anchor < editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
+
     int end = editor->cursor.anchor > editor->cursor.pos ? editor->cursor.anchor : editor->cursor.pos;
-    
-    HBRUSH hbr = CreateSolidBrush(GetSysColor(COLOR_HIGHLIGHT));
+
+    HBRUSH hbr = CreateSolidBrush(
+        GetSysColor(COLOR_HIGHLIGHT)
+    );
 
     for (int i = 0; i < editor->buffer.length; i++) {
         if (editor->buffer.data[i] == '\n') {
@@ -427,24 +769,48 @@ void editor_render(HDC hdc, Editor *editor) {
         SIZE size;
         GetTextExtentPoint32A(hdc, &editor->buffer.data[i], 1, &size);
 
+        if (i == 0 ||
+            editor->buffer.data[i - 1] == ' ' ||
+            editor->buffer.data[i - 1] == '\n') {
+
+            int word_end = get_word_end(editor, i);
+
+            int word_width = 0;
+
+            for (int j = i; j < word_end; j++) {
+                SIZE s;
+                GetTextExtentPoint32A(hdc, &editor->buffer.data[j], 1, &s);
+                word_width += s.cx;
+            }
+
+            if (x != 10 && x + word_width > max_x) {
+                x = 10;
+                y += 20;
+            }
+        }
+        if (x + size.cx > max_x) {
+            x = 10;
+            y += 20;
+        }
         if (i >= start && i < end) {
-            RECT rect = {x, y, x + size.cx, y + 20};
-            FillRect(hdc, &rect, hbr);
+
+            RECT highlight = {x, y, x + size.cx, y + 20};
+
+            FillRect(hdc, &highlight, hbr);
             SetTextColor(hdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
         }
-        else {
-            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
-        }
+        else SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
         TextOutA(hdc, x, y, &editor->buffer.data[i], 1);
+
         x += size.cx;
     }
-    DeleteObject(hbr);
 
-    get_cursor_screen_pos(hdc, editor, &x, &y);
+    DeleteObject(hbr);
+    get_cursor_screen_pos(hwnd, hdc, editor, &x, &y);
     MoveToEx(hdc, x, y, NULL);
     LineTo(hdc, x, y + 20);
-    
 }
+
 
 void save_file(HWND hwnd, Editor *editor) {
     if (!strlen(editor->filename)) {
